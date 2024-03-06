@@ -44,7 +44,7 @@
 
 //#define FASTLED_ALL_PINS_HARDWARE_SPI
 //#define FASTLED_ESP32_SPI_BUS SPI
-//#include <SPI.h>
+#include <SPI.h>
 #include <FastLED.h>
 
 #include "arduino_secrets.h"
@@ -71,7 +71,7 @@ const long interval = 100;
 unsigned long previousMillis = 0, previousFireMillis = 0;
 
 Adafruit_LSM6DSO32 lsm6ds; // can use any LSM6DS/ISM330 family chip!
-Adafruit_Sensor *lsm_temp, *lsm_accel, *lsm_gyro;
+Adafruit_Sensor *lsm_temp, *lsm_accel;
 
 // LED DEFINES
 #define LED_TYPE    WS2812
@@ -81,7 +81,13 @@ Adafruit_Sensor *lsm_temp, *lsm_accel, *lsm_gyro;
 #define NUM_OUTSIDE (NUM_LEDS-NUM_INSIDE)
 #define BRIGHTNESS  80
 #define FIRE_BRIGHTNESS   156
-#define LED_PIN     35
+#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32S2)
+#define LED_PIN     35  /* MOSI */
+#define VOLT_PIN    A2
+#else /* XIAO-ESP32-C3 */
+#define LED_PIN     10  /* MOSI */
+#define VOLT_PIN    A0
+#endif
 
 #define BLAST_DURATION 1057
 
@@ -136,9 +142,13 @@ void setup() {
    /* Accel/Gyro Sensor Setup */
    Serial.println("Adafruit LSM6DS setup!");
 
+#if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32S2)
    Wire1.setPins(SDA1, SCL1);
 
    if (!lsm6ds.begin_I2C(LSM6DS_I2CADDR_DEFAULT, &Wire1, 0)) {
+#else
+   if (!lsm6ds.begin_I2C(LSM6DS_I2CADDR_DEFAULT, &Wire, 0)) {
+#endif
       Serial.println("Failed to find LSM6DS chip");
       while (1) {
          delay(10);
@@ -157,9 +167,6 @@ void setup() {
 
    lsm_accel = lsm6ds.getAccelerometerSensor();
    lsm_accel->printSensorDetails();
-
-   lsm_gyro = lsm6ds.getGyroSensor();
-   lsm_gyro->printSensorDetails();
    /* End Sensor Setup */
 
 #if defined(NEOPIXEL_POWER)
@@ -327,13 +334,15 @@ void setup() {
    //repulsor->showLeds(20);
 }
 
+unsigned long previousSendMillis = 0; // will store last time the messages were sent
+const long sendInterval = 1000;       // interval at which to execute code block (milliseconds)
+
 void loop() {
    static StaticJsonDocument<256> send_doc;
    static StaticJsonDocument<256> recv_doc;
    static char input_json[256];
    static char output_json[256];
    sensors_event_t accel;
-   sensors_event_t gyro;
    sensors_event_t temp;
 
    int power_switch = 0;
@@ -344,6 +353,7 @@ void loop() {
 #if 0
    // check for incoming messages
    int messageSize = mqttClient.parseMessage();
+
    if (messageSize) {
       // we received a message, print out the topic and contents
       Serial.print("Received a message with topic '");
@@ -378,42 +388,58 @@ void loop() {
   }
 #endif
 
-   // to avoid having delays in loop, we'll use the strategy from BlinkWithoutDelay
-   // see: File -> Examples -> 02.Digital -> BlinkWithoutDelay for more info
    unsigned long currentMillis = millis();
 
-   if (currentMillis - previousMillis >= hand_delay) {
-      adc1_config_width(ADC_WIDTH_BIT_13);
-      int adcInput = analogRead(A2);
-      //float voltage = ((adcInput * 3.3) / 4095);
+   if (currentMillis - previousSendMillis >= sendInterval) {
+      previousSendMillis = currentMillis;
 
-      float voltage = adcInput / 1566.19; // This value is a hack for now. ESP32 is returning a strange value.
-      //voltage *= 3.6;
-      //voltage /= 4096;
+      // Read the voltage in millivolts from pin A2
+      uint32_t voltageMilliVolts = analogReadMilliVolts(VOLT_PIN);
+
+      // Convert millivolts to volts for easier reading
+      float voltage = 2 * voltageMilliVolts / 1000.0;
 
       send_doc["device"] =  topic;
       send_doc["voltage"] = roundf(voltage * 100) / 100.0;
       serializeJson(send_doc, output_json, 256);
       send_doc.clear();
 
-#ifndef SUPPRESS_NOISE
       Serial.print(broker);
       Serial.print(":");
       Serial.print(port);
       Serial.print("/");
       Serial.println(topic);
       Serial.println(output_json);
-#endif
 
       // send message, the Print interface can be used to set the message contents
       mqttClient.beginMessage(topic);
       mqttClient.print(output_json);
       mqttClient.endMessage();
-    
-      /* Get sensor data. */
+
+      /* Get temp from device */
       lsm_temp->getEvent(&temp);
+
+      send_doc["device"] =   topic;
+      send_doc["temp"] = roundf(temp.temperature * 100) / 100.0;
+      serializeJson(send_doc, output_json, 256);
+      send_doc.clear();
+
+      Serial.print(broker);
+      Serial.print(":");
+      Serial.print(port);
+      Serial.print("/");
+      Serial.println(topic);
+      Serial.println(output_json);
+
+      // send message, the Print interface can be used to set the message contents
+      mqttClient.beginMessage(topic);
+      mqttClient.print(output_json);
+      mqttClient.endMessage();
+   }
+
+   if (currentMillis - previousMillis >= hand_delay) {
+      /* Get sensor data. */
       lsm_accel->getEvent(&accel);
-      //lsm_gyro->getEvent(&gyro);
 
       if (accel.acceleration.x > 7.0)
       {
@@ -440,38 +466,6 @@ void loop() {
       Serial.println(" m/s^2 ");
 #endif
 
-#if 0
-      /* Display the results (rotation is measured in rad/s) */
-      Serial.print("\t\tGyro X: ");
-      Serial.print(gyro.gyro.x);
-      Serial.print(" \tY: ");
-      Serial.print(gyro.gyro.y);
-      Serial.print(" \tZ: ");
-      Serial.print(gyro.gyro.z);
-      Serial.println(" radians/s ");
-      Serial.println();
-      /* Got sensor data */
-#endif
-
-      send_doc["device"] =   topic;
-      send_doc["temp"] = roundf(temp.temperature * 100) / 100.0;
-      serializeJson(send_doc, output_json, 256);
-      send_doc.clear();
-
-#ifndef SUPPRESS_NOISE
-      Serial.print(broker);
-      Serial.print(":");
-      Serial.print(port);
-      Serial.print("/");
-      Serial.println(topic);
-      Serial.println(output_json);
-#endif
-
-      // send message, the Print interface can be used to set the message contents
-      mqttClient.beginMessage(topic);
-      mqttClient.print(output_json);
-      mqttClient.endMessage();
-
       // Begin LED processing
       if ((firing <= 0) && (fire_switch != fire_switch_state))
       {
@@ -487,14 +481,12 @@ void loop() {
             serializeJson(send_doc, output_json, 256);
             send_doc.clear();
 
-#ifndef SUPPRESS_NOISE
             Serial.print(broker);
             Serial.print(":");
             Serial.print(port);
             Serial.print("/");
             Serial.println(topic);
             Serial.println(output_json);
-#endif
 
             // send message, the Print interface can be used to set the message contents
             mqttClient.beginMessage(topic);
@@ -553,14 +545,12 @@ void loop() {
                serializeJson(send_doc, output_json, 256);
                send_doc.clear();
 
-#ifndef SUPPRESS_NOISE
                Serial.print(broker);
                Serial.print(":");
                Serial.print(port);
                Serial.print("/");
                Serial.println(topic);
                Serial.println(output_json);
-#endif
 
                // send message, the Print interface can be used to set the message contents
                mqttClient.beginMessage(topic);
@@ -587,14 +577,12 @@ void loop() {
                serializeJson(send_doc, output_json, 256);
                send_doc.clear();
 
-#ifndef SUPPRESS_NOISE
                Serial.print(broker);
                Serial.print(":");
                Serial.print(port);
                Serial.print("/");
                Serial.println(topic);
                Serial.println(output_json);
-#endif
 
                // send message, the Print interface can be used to set the message contents
                mqttClient.beginMessage(topic);
@@ -615,14 +603,12 @@ void loop() {
                serializeJson(send_doc, output_json, 256);
                send_doc.clear();
 
-#ifndef SUPPRESS_NOISE
                Serial.print(broker);
                Serial.print(":");
                Serial.print(port);
                Serial.print("/");
                Serial.println(topic);
                Serial.println(output_json);
-#endif
 
                // send message, the Print interface can be used to set the message contents
                mqttClient.beginMessage(topic);
@@ -646,14 +632,12 @@ void loop() {
                serializeJson(send_doc, output_json, 256);
                send_doc.clear();
 
-#ifndef SUPPRESS_NOISE
                Serial.print(broker);
                Serial.print(":");
                Serial.print(port);
                Serial.print("/");
                Serial.println(topic);
                Serial.println(output_json);
-#endif
 
                // send message, the Print interface can be used to set the message contents
                mqttClient.beginMessage(topic);
@@ -674,14 +658,12 @@ void loop() {
                serializeJson(send_doc, output_json, 256);
                send_doc.clear();
 
-#ifndef SUPPRESS_NOISE
                Serial.print(broker);
                Serial.print(":");
                Serial.print(port);
                Serial.print("/");
                Serial.println(topic);
                Serial.println(output_json);
-#endif
 
                // send message, the Print interface can be used to set the message contents
                mqttClient.beginMessage(topic);
@@ -705,14 +687,12 @@ void loop() {
                serializeJson(send_doc, output_json, 256);
                send_doc.clear();
 
-#ifndef SUPPRESS_NOISE
                Serial.print(broker);
                Serial.print(":");
                Serial.print(port);
                Serial.print("/");
                Serial.println(topic);
                Serial.println(output_json);
-#endif
 
                // send message, the Print interface can be used to set the message contents
                mqttClient.beginMessage(topic);
