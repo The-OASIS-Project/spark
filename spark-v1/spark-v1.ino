@@ -27,7 +27,7 @@
 #define SUPPRESS_NOISE
 
 #include "esp_adc_cal.h"
-#define CONN_RETRY_ATTEMPTS  5
+#define CONN_RETRY_ATTEMPTS  10
 
 #include <ArduinoMqttClient.h>
 #if defined(ARDUINO_SAMD_MKRWIFI1010) || defined(ARDUINO_SAMD_NANO_33_IOT) || defined(ARDUINO_AVR_UNO_WIFI_REV2)
@@ -38,6 +38,7 @@
    #include <ESP8266WiFi.h>
 #elif defined(ARDUINO_ARCH_ESP32)
    #include <WiFi.h>
+   #include "esp_wifi.h"
 #endif
 
 #include <Adafruit_LSM6DSO32.h>
@@ -66,7 +67,7 @@ String brokerString;
 const char *broker = NULL;
 int port = 1883;
 
-const char topic[]  = "repulsor/left";
+const char topic[]  = "repulsor/right";
 
 const long interval = 100;
 unsigned long previousMillis = 0, previousFireMillis = 0;
@@ -81,7 +82,7 @@ Adafruit_Sensor *lsm_temp, *lsm_accel;
 #define NUM_INSIDE  7
 #define NUM_OUTSIDE (NUM_LEDS-NUM_INSIDE)
 #define BRIGHTNESS  80
-#define FIRE_BRIGHTNESS   156
+#define FIRE_BRIGHTNESS   190
 #if defined(CONFIG_IDF_TARGET_ESP32S3) || defined(CONFIG_IDF_TARGET_ESP32S2)
 #define LED_PIN     35  /* MOSI */
 #define VOLT_PIN    A2
@@ -291,6 +292,9 @@ void setup() {
    Serial.print("GATEWAY: ");
    Serial.println(WiFi.gatewayIP());
 
+   // Set maximum WiFi transmission power
+   esp_wifi_set_max_tx_power(84);  // 84 corresponds to 21 dBm, which is the maximum for ESP32-*
+
    // You can provide a unique client ID, if not set the library uses Arduino-millis()
    // Each client must have a unique client ID
    // mqttClient.setId("clientId");
@@ -336,9 +340,9 @@ unsigned long previousSendMillis = 0; // will store last time the messages were 
 const long sendInterval = 1000;       // interval at which to execute code block (milliseconds)
 
 void loop() {
-   static StaticJsonDocument<256> send_doc;
-   static StaticJsonDocument<256> recv_doc;
-   static char input_json[256];
+   static JsonDocument send_doc;
+   //static JsonDocument recv_doc;
+   //static char input_json[256];
    static char output_json[256];
    sensors_event_t accel;
    sensors_event_t temp;

@@ -26,21 +26,13 @@
 
 #define SUPPRESS_NOISE
 
-#include "esp_adc_cal.h"
 #define CONN_RETRY_ATTEMPTS  5
 
+#include <WiFi.h>
 #include <ArduinoMqttClient.h>
-#if defined(ARDUINO_SAMD_MKRWIFI1010) || defined(ARDUINO_SAMD_NANO_33_IOT) || defined(ARDUINO_AVR_UNO_WIFI_REV2)
-   #include <WiFiNINA.h>
-#elif defined(ARDUINO_SAMD_MKR1000)
-   #include <WiFi101.h>
-#elif defined(ARDUINO_ARCH_ESP8266)
-   #include <ESP8266WiFi.h>
-#elif defined(ARDUINO_ARCH_ESP32)
-   #include <WiFi.h>
-#endif
 
 #include <ArduinoJson.h>
+
 #include <Adafruit_AHTX0.h>
 
 #include "arduino_secrets.h"
